@@ -13,37 +13,48 @@ export default function PosPage() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // State untuk Modal Pembayaran
   const [isCheckout, setIsCheckout] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<"CASH" | "QRIS_STATIC" | "QRIS_DYNAMIC">("CASH");
   const [paymentStatus, setPaymentStatus] = useState<"WAITING" | "PAID">("WAITING");
   const [transactionId, setTransactionId] = useState("");
+  const [receiptData, setReceiptData] = useState<{ id: string; items: CartItem[]; total: number; method: string } | null>(null);
 
-  // Ambil Data Barang dari Supabase
+  const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+
+  // Ambil Data Barang
   useEffect(() => {
-    const fetchProducts = async () => {
-      const { data } = await supabase.from("products").select("id, name, selling_price, stock");
-      if (data) {
-        setProducts(data.map(p => ({ id: p.id, name: p.name, price: Number(p.selling_price), stock: p.stock })));
-      }
-      setLoading(false);
-    };
     fetchProducts();
   }, [supabase]);
 
+  const fetchProducts = async () => {
+    const { data } = await supabase.from("products").select("id, name, selling_price, stock");
+    if (data) {
+      setProducts(data.map(p => ({ id: p.id, name: p.name, price: Number(p.selling_price), stock: p.stock })));
+    }
+    setLoading(false);
+  };
+
+  // BROADCAST ke Customer Display via LocalStorage
+  useEffect(() => {
+    localStorage.setItem("smartpos_cart", JSON.stringify(cart));
+    localStorage.setItem("smartpos_payment", JSON.stringify({ isCheckout, total, method: paymentMethod, status: paymentStatus, trxId: transactionId }));
+  }, [cart, isCheckout, total, paymentMethod, paymentStatus, transactionId]);
+
   const addToCart = (product: Product) => {
+    if (product.stock <= 0) return alert("Stok habis!");
     setCart((prev) => {
       const existing = prev.find((item) => item.id === product.id);
       if (existing) {
+        if (existing.qty >= product.stock) {
+          alert("Mencapai batas stok maksimal!");
+          return prev;
+        }
         return prev.map((item) => item.id === product.id ? { ...item, qty: item.qty + 1 } : item);
       }
       return [...prev, { ...product, qty: 1 }];
     });
   };
 
-  const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
-
-  // Fungsi Mulai Checkout
   const handleCheckout = () => {
     const trxId = `TRX-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
     setTransactionId(trxId);
@@ -51,17 +62,11 @@ export default function PosPage() {
     setIsCheckout(true);
   };
 
-  // Simulasi Webhook/Callback dari Payment Gateway untuk QRIS Dinamis
-  const simulatePaymentGatewayCallback = () => {
-    setPaymentStatus("PAID");
-  };
-
-  // Selesaikan Transaksi & Simpan ke DB
   const processTransaction = async () => {
-    // Simpan ke tabel sales (Disederhanakan)
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData?.user?.id || null;
 
+    // 1. Simpan Transaksi Utama
     const { data: saleData, error: saleError } = await supabase
       .from("sales")
       .insert([{
@@ -75,21 +80,33 @@ export default function PosPage() {
       .single();
 
     if (!saleError && saleData) {
-      // Simpan detail barang ke sale_items
-      const itemsToInsert = cart.map(item => ({
-        sale_id: saleData.id,
-        product_id: item.id,
-        quantity: item.qty,
-        price: item.price,
-        subtotal: item.price * item.qty
-      }));
+      // 2. Simpan Detail & Potong Stok Otomatis
+      const itemsToInsert = [];
+      for (const item of cart) {
+        itemsToInsert.push({
+          sale_id: saleData.id,
+          product_id: item.id,
+          quantity: item.qty,
+          price: item.price,
+          subtotal: item.price * item.qty
+        });
+        
+        // POTONG STOK DI DATABASE
+        const newStock = item.stock - item.qty;
+        await supabase.from("products").update({ stock: newStock }).eq("id", item.id);
+      }
       await supabase.from("sale_items").insert(itemsToInsert);
     }
 
-    // Reset Kasir
-    alert(`Pembayaran Diterima!\nRp ${total.toLocaleString("id-ID")}\nTransaksi: #${transactionId}`);
+    // Tampilkan Struk & Bersihkan Kasir
+    setReceiptData({ id: transactionId, items: [...cart], total, method: paymentMethod });
     setIsCheckout(false);
     setCart([]);
+    fetchProducts(); // Refresh stok terbaru di layar kasir
+  };
+
+  const printReceipt = () => {
+    window.print();
   };
 
   return (
@@ -97,15 +114,17 @@ export default function PosPage() {
       {/* Product List */}
       <div className="flex-1 p-6 overflow-y-auto bg-gray-50">
         <h2 className="text-xl font-bold mb-4">Pilih Barang</h2>
+        <a href="/pos/display" target="_blank" className="text-sm text-blue-600 underline mb-4 inline-block">Buka Layar Customer Display (Tab Baru)</a>
+        
         {loading ? (
           <p>Memuat barang dari database...</p>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
             {products.length === 0 ? <p className="text-gray-500">Belum ada barang.</p> : products.map((prod) => (
-              <button key={prod.id} onClick={() => addToCart(prod)} className="bg-white p-4 rounded-xl shadow-sm border text-left hover:border-blue-500 transition">
+              <button key={prod.id} onClick={() => addToCart(prod)} disabled={prod.stock <= 0} className={`p-4 rounded-xl shadow-sm border text-left transition ${prod.stock <= 0 ? "bg-gray-200 opacity-50 cursor-not-allowed" : "bg-white hover:border-blue-500"}`}>
                 <div className="font-medium text-gray-900">{prod.name}</div>
                 <div className="text-blue-600 font-bold mt-2">Rp {prod.price.toLocaleString("id-ID")}</div>
-                <div className="text-xs text-gray-400 mt-1">Stok: {prod.stock}</div>
+                <div className="text-xs text-gray-500 mt-1">Sisa Stok: {prod.stock}</div>
               </button>
             ))}
           </div>
@@ -132,6 +151,15 @@ export default function PosPage() {
             ))
           )}
         </div>
+        
+        {/* Tombol Print Jika Ada Transaksi Selesai */}
+        {receiptData && (
+          <div className="p-4 bg-green-50 border-t border-green-200 text-center">
+            <p className="text-sm text-green-700 mb-2">Transaksi <strong>#{receiptData.id}</strong> berhasil.</p>
+            <button onClick={printReceipt} className="bg-green-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-700 text-sm">🖨️ Cetak Struk Terakhir</button>
+          </div>
+        )}
+
         <div className="p-6 bg-gray-50 border-t">
           <div className="flex justify-between items-center mb-4 text-xl">
             <span className="font-medium">Total</span>
@@ -156,59 +184,36 @@ export default function PosPage() {
             </div>
             
             <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
-              {/* Opsi Metode */}
               <div className="space-y-3">
                 <h3 className="font-semibold text-gray-700 mb-3">Metode Pembayaran</h3>
                 {(["CASH", "QRIS_STATIC", "QRIS_DYNAMIC"] as const).map(method => (
-                  <button 
-                    key={method} 
-                    onClick={() => setPaymentMethod(method)}
-                    className={`w-full p-4 rounded-xl border-2 text-left font-medium transition ${paymentMethod === method ? "border-blue-600 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-700 hover:border-gray-300"}`}
-                  >
-                    {method === "CASH" ? "💵 Tunai / Cash" : method === "QRIS_STATIC" ? "📱 QRIS Statis (Level 1)" : "⚡ QRIS Dinamis API (Level 2)"}
+                  <button key={method} onClick={() => setPaymentMethod(method)} className={`w-full p-4 rounded-xl border-2 text-left font-medium transition ${paymentMethod === method ? "border-blue-600 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-700 hover:border-gray-300"}`}>
+                    {method === "CASH" ? "💵 Tunai / Cash" : method === "QRIS_STATIC" ? "📱 QRIS Statis" : "⚡ QRIS Dinamis API"}
                   </button>
                 ))}
               </div>
 
-              {/* Area Tampilan QRIS / Konfirmasi */}
               <div className="bg-gray-50 p-6 rounded-xl border flex flex-col items-center justify-center min-h-[300px] text-center">
                 {paymentMethod === "CASH" && (
                   <div>
-                    <div className="text-6xl mb-4">💵</div>
-                    <h4 className="font-bold text-lg mb-2">Pembayaran Tunai</h4>
-                    <p className="text-sm text-gray-500 mb-6">Terima uang tunai dari pelanggan dan berikan kembalian jika ada.</p>
-                    <button onClick={processTransaction} className="bg-green-600 text-white font-bold py-3 px-8 rounded-xl hover:bg-green-700 w-full">Konfirmasi Lunas</button>
-                  </div>
-                )}
-
-                {paymentMethod === "QRIS_STATIC" && (
-                  <div>
-                    <h4 className="font-bold mb-2">QRIS Statis Toko</h4>
-                    <p className="text-xs text-gray-500 mb-4">Pelanggan scan QR ini dan memasukkan nominal Rp {total.toLocaleString("id-ID")} secara manual.</p>
-                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=QRIS_STATIS_TOKO_MAKMUR`} alt="QRIS Statis" className="mx-auto mb-4 p-2 bg-white rounded-lg border shadow-sm w-40 h-40" />
-                    <button onClick={processTransaction} className="bg-green-600 text-white font-bold py-3 px-8 rounded-xl hover:bg-green-700 w-full">Cek Mutasi & Lunas</button>
+                    <h4 className="font-bold text-lg mb-2">Tunai</h4>
+                    <button onClick={processTransaction} className="bg-green-600 text-white font-bold py-3 px-8 rounded-xl hover:bg-green-700 w-full">Selesaikan Pembayaran</button>
                   </div>
                 )}
 
                 {paymentMethod === "QRIS_DYNAMIC" && (
                   <div>
                     <h4 className="font-bold mb-2">QRIS Dinamis</h4>
-                    <p className="text-xs text-gray-500 mb-4">Otomatis terisi nominal Rp {total.toLocaleString("id-ID")}</p>
                     {paymentStatus === "WAITING" ? (
                       <>
-                        <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=QRIS_DYN_${transactionId}_${total}`} alt="QRIS Dinamis" className="mx-auto mb-4 p-2 bg-white rounded-lg border shadow-sm w-40 h-40" />
-                        <div className="flex items-center justify-center space-x-2 text-orange-600 mb-4">
-                          <span className="animate-spin text-xl">⏳</span>
-                          <span className="text-sm font-semibold">Menunggu Pembayaran...</span>
-                        </div>
-                        <button onClick={simulatePaymentGatewayCallback} className="text-xs text-gray-400 underline mt-4">*(Simulasi API: Klik untuk memalsukan respon sukses PJP)*</button>
+                        <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=QRIS_DYN_${transactionId}_${total}`} alt="QRIS" className="mx-auto mb-4 w-40 h-40" />
+                        <span className="text-orange-600 text-sm font-semibold">⏳ Menunggu Pembayaran...</span>
+                        <button onClick={() => setPaymentStatus("PAID")} className="block text-xs text-blue-500 underline mt-4">Simulasi: Pelanggan Sudah Bayar</button>
                       </>
                     ) : (
-                      <div className="py-8">
-                        <div className="text-5xl mb-4">✅</div>
-                        <h4 className="font-bold text-xl text-green-600 mb-2">Pembayaran Diterima!</h4>
-                        <p className="text-sm text-gray-500">API Gateway telah mengonfirmasi transaksi ini.</p>
-                        <button onClick={processTransaction} className="mt-6 bg-blue-600 text-white font-bold py-3 px-8 rounded-xl hover:bg-blue-700 w-full">Cetak Struk Transaksi</button>
+                      <div>
+                        <h4 className="font-bold text-xl text-green-600 mb-2">✅ Diterima!</h4>
+                        <button onClick={processTransaction} className="mt-6 bg-blue-600 text-white font-bold py-3 px-8 rounded-xl">Proses Transaksi</button>
                       </div>
                     )}
                   </div>
@@ -222,6 +227,48 @@ export default function PosPage() {
           </div>
         </div>
       )}
+
+      {/* STRUK THERMAL 58mm (Disembunyikan di layar, hanya muncul saat print) */}
+      {receiptData && (
+        <div id="print-area" className="hidden print:block w-[58mm] bg-white text-black p-2 font-mono text-[12px] leading-tight mx-auto">
+          <div className="text-center mb-4">
+            <h1 className="font-bold text-lg">GTI SmartPOS</h1>
+            <p>Toko Kelontong & UMKM</p>
+            <p>========================</p>
+          </div>
+          
+          <div className="mb-2">
+            <p>Tgl: {new Date().toLocaleString('id-ID')}</p>
+            <p>Trx: {receiptData.id}</p>
+            <p>Metode: {receiptData.method}</p>
+          </div>
+          <p>------------------------</p>
+
+          <div className="my-2 space-y-2">
+            {receiptData.items.map(item => (
+              <div key={item.id}>
+                <div>{item.name}</div>
+                <div className="flex justify-between">
+                  <span>{item.qty} x {item.price}</span>
+                  <span>{item.qty * item.price}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <p>------------------------</p>
+          <div className="flex justify-between font-bold text-[14px] my-2">
+            <span>TOTAL</span>
+            <span>Rp {receiptData.total.toLocaleString("id-ID")}</span>
+          </div>
+          <p>========================</p>
+          <div className="text-center mt-4">
+            <p>Terima Kasih</p>
+            <p>Barang yang dibeli tidak dapat ditukar/dikembalikan.</p>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
