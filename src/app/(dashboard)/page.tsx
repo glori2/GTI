@@ -10,7 +10,7 @@ export default async function DashboardPage() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const { data: sales, error: salesError } = await supabase
+  const { data: sales } = await supabase
     .from("sales")
     .select("id, total_amount, created_at")
     .eq("payment_status", "PAID")
@@ -33,6 +33,7 @@ export default async function DashboardPage() {
       .in("sale_id", saleIds);
 
     if (saleItems) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       saleItems.forEach((item: any) => {
         const modal = Number(item.products?.purchase_price || 0);
         const jual = Number(item.price);
