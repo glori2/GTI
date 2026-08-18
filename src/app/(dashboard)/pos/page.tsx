@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/utils/supabase/client";
 
+import { logAudit } from "@/utils/auditLogger";
+
 // Tipe Data
 type Product = { id: string; name: string; price: number; stock: number };
 type CartItem = Product & { qty: number };
@@ -96,6 +98,9 @@ export default function PosPage() {
         await supabase.from("products").update({ stock: newStock }).eq("id", item.id);
       }
       await supabase.from("sale_items").insert(itemsToInsert);
+
+      // Catat ke Audit Log
+      await logAudit(supabase, "TRANSAKSI_KASIR", `Menyelesaikan transaksi #${transactionId} senilai Rp ${total}`);
     }
 
     // Tampilkan Struk & Bersihkan Kasir

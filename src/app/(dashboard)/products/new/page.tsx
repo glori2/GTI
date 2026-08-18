@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/utils/supabase/client";
+import { logAudit } from "@/utils/auditLogger";
 import Barcode from "react-barcode";
 import Link from "next/link";
 
@@ -63,6 +64,9 @@ export default function AddProductPage() {
       setError(insertError.message);
       setLoading(false);
     } else {
+      // Catat ke Audit Log
+      await logAudit(supabase, "TAMBAH_BARANG", `Menambahkan barang baru: ${formData.name} (${formData.sku})`);
+      
       router.push("/products");
       router.refresh(); 
     }
