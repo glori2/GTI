@@ -47,7 +47,8 @@ export default function Sidebar() {
         {(canAccessDashboard || !role) && <Link href="/" className="block px-4 py-2 rounded-lg hover:bg-gray-100 font-medium">Dashboard</Link>}
         {(canAccessPos || !role) && <Link href="/pos" className="block px-4 py-2 rounded-lg hover:bg-gray-100 font-medium text-blue-600">Kasir (POS)</Link>}
         {(canAccessProducts || !role) && <Link href="/products" className="block px-4 py-2 rounded-lg hover:bg-gray-100 font-medium">Barang</Link>}
-        {(canAccessReports || !role) && <Link href="/reports" className="block px-4 py-2 rounded-lg hover:bg-gray-100 font-medium">Laporan</Link>}
+        {(canAccessProducts || !role) && <Link href="/purchases" className="block px-4 py-2 rounded-lg hover:bg-gray-100 font-medium">Pembelian & Stok Masuk</Link>}
+        {(canAccessReports || !role) && <Link href="/reports" className="block px-4 py-2 rounded-lg hover:bg-gray-100 font-medium">Laporan & Pajak</Link>}
       </nav>
       <div className="p-4 border-t">
         <button 
